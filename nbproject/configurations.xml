@@ -35,6 +35,9 @@
         <rebuildPropChanged>false</rebuildPropChanged>
       </toolsSet>
       <compileType>
+        <cTool>
+          <commandLine>-pthread</commandLine>
+        </cTool>
       </compileType>
       <item path="server_chat.c" ex="false" tool="0" flavor2="0">
       </item>
