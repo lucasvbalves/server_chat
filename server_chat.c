@@ -16,6 +16,7 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <pthread.h>
+#include <time.h>
 
 #define MAXDATASIZE 2000
 #define BACKLOG 10          // how many pending connections queue will hold
@@ -380,12 +381,25 @@ void *thread_t2() {
 
     struct reg_client *client_struct;
 
+
+    struct tm *time_struct;
+    time_t t;
+    
+
+    fd_set master_cpy_fd_set;
     fd_set read_fd_set;
+    
+    master_cpy_fd_set = master_fd_set;
 
     while (1) { // main accept() loop
-
+        
+        t = time(NULL);
+        time_struct = localtime(&t);
+        printf("\nHora %d:%d\n", time_struct->tm_hour, time_struct->tm_min);
+        
+        
         FD_ZERO(&read_fd_set);
-        read_fd_set = master_fd_set;
+        read_fd_set = master_cpy_fd_set;
 
         printf("thread_t2 - pipe_fd[0] = %d\n", pipe_fd[0]);
         printf("thread_t2 - max_fd = %d\n", max_fd);
@@ -402,19 +416,27 @@ void *thread_t2() {
 
             printf("ERRO: Timeout ocorreu\n");\
             
-        } else {
+        } else {    // algum file descriptor pronto para ser lido
 
-            for (i = 0; i <= max_fd; i++) {
+            for (i = 0; i <= max_fd; i++) { // percorre todos os file descriptors monitorados
+
+                memset(comando, '\0', sizeof comando);
+                memset(pipe_message, '\0', sizeof pipe_message);
+                memset(buf_recv, '\0', sizeof buf_recv);
+                memset(buf_send, '\0', sizeof buf_send);
+                memset(buf_message, '\0', sizeof buf_message);
+                memset(buf_message_sendto, '\0', sizeof buf_message_sendto);
+                memset(buf_client_name, '\0', sizeof buf_client_name);
 
                 printf("for do select %d\n", i);
 
-                if (FD_ISSET(i, &read_fd_set)) { // we got one!!
+                if (FD_ISSET(i, &read_fd_set)) {    // file descriptor 'i' pronto para ser lido
 
-                    if (i != pipe_fd[0]) { //mensagem em algum socket
+                    if (i != pipe_fd[0]) {  // 'i não é o pipe[0], então é um socket
 
                         numbytes = recv(i, buf_recv, MAXDATASIZE - 1, 0);
 
-                        if (numbytes <= 0) { //algo errado aconteceu
+                        if (numbytes <= 0) { //algo errado aconteceu na recepção
 
                             if (numbytes == 0) {
 
@@ -426,9 +448,10 @@ void *thread_t2() {
 
                             }
 
-                            close(i); // fecha conexão
+                            close(i); // problema no socket, fecha conexão
 
                             FD_CLR(i, &master_fd_set); // remove from master set                            
+                            FD_CLR(i, &master_cpy_fd_set); // remove from master copy set
 
                             client_struct = search_client_sockfd(lista_clients, i);
 
@@ -442,20 +465,22 @@ void *thread_t2() {
                                     printf("Falha na exclusao do client!\n");
                                 }
 
-
                             } else { //problema: lista vazia ou não encontrado
 
                                 printf("ERRO: Socket file descriptor não encontrado na lista\n");
 
                             }
 
-                        } else { // recebeu mensagem de cliente
+                        } else {    // numbytes > 0. recebeu mensagem de client
 
+                            buf_recv[numbytes] = '\0';
+                            
                             printf("Mensagem client: %s\n", buf_recv);
+                            printf("Numero bytes recebidos: %d\n", numbytes);
 
                             // identificação do comando para executar
                             j = 0;
-                            while (buf_recv[j] != ' ') {
+                            while (buf_recv[j] != ' ' && buf_recv[j] != '\0') {
 
                                 comando[j] = toupper(buf_recv[j]);
                                 j++;
@@ -464,8 +489,10 @@ void *thread_t2() {
 
                             printf("comando: '%s'\n", comando);
 
-                            strcpy(buf_message, &buf_recv[j + 1]);
+                            strcpy(buf_message, &buf_recv[j+1]);  //retira o comando e salva apenas a mensagem
 
+                            //memset(buf_recv, '\0', sizeof buf_recv);
+                            
                             printf("message: '%s'\n", buf_message);
 
                             if (strcmp(comando, "SEND") == 0) {
@@ -476,6 +503,8 @@ void *thread_t2() {
                                 if (client_struct != NULL) { //client encontrado. pega nome dele
 
                                     sprintf(buf_send, "%s: %s", client_struct->name, buf_message);
+                                    
+                                    //memset(buf_message, '\0', sizeof buf_message);
 
                                     printf("buf_send: '%s'\n", buf_send);
 
@@ -484,7 +513,7 @@ void *thread_t2() {
                                     // we got some data from a client
                                     for (k = 0; k <= max_fd; k++) {
                                         // send to everyone!
-                                        if (FD_ISSET(k, &master_fd_set)) {
+                                        if (FD_ISSET(k, &master_cpy_fd_set)) {
                                             // exceto o pipe e o client que enviou (i)
                                             if (k != pipe_fd[0] && k != i) {
                                                 bytes_sent = send(k, buf_send, string_length, 0);
@@ -506,7 +535,7 @@ void *thread_t2() {
 
                                 //retirar client_name do buf_message
                                 j = 0;
-                                while (buf_message[j] != ' ') {
+                                while (buf_message[j] != ' ' && buf_message[j] != '\0') {
 
                                     buf_client_name[j] = buf_message[j];
                                     j++;
@@ -515,8 +544,10 @@ void *thread_t2() {
 
                                 printf("sendto client_name: '%s'\n", buf_client_name);
 
-                                strcpy(buf_message_sendto, &buf_message[j + 1]);
+                                strcpy(buf_message_sendto, &buf_message[j + 1]);    //retira nome do client de destino e salva mensagem
 
+                                //memset(buf_message, '\0', sizeof buf_message);
+                                
                                 printf("sendto message: '%s'\n", buf_message_sendto);
 
                                 printf("executar comando %s\n", comando);
@@ -538,6 +569,8 @@ void *thread_t2() {
                                         //monta o buf_send para envio
                                         sprintf(buf_send, "%s: %s", client_struct->name, buf_message_sendto);
 
+                                        //memset(buf_message_sendto, '\0', sizeof buf_message_sendto);
+                                        
                                         printf("1\n");
 
                                         string_length = strlen(buf_send);
@@ -565,13 +598,13 @@ void *thread_t2() {
 
                                     printf("5\n");
 
-                                    memset(buf_send, '\0', sizeof buf_send);
+                                    //memset(buf_send, '\0', sizeof buf_send);
 
                                     printf("buf_send: '%s'\n", buf_send);
 
                                     printf("6\n");
 
-                                    sprintf(buf_send, "ERRO: Client %s não está conectado", buf_client_name);
+                                    sprintf(buf_send, "ERRO: Client '%s' não está conectado", buf_client_name);
 
                                     printf("buf_send: '%s'\n", buf_send);
 
@@ -594,10 +627,58 @@ void *thread_t2() {
                                     printf("buf_send: '%s'\n", buf_send);
 
                                 }
+                                
+                                //memset(buf_client_name, '\0', sizeof buf_client_name);
 
                             } else if (strcmp(comando, "WHO") == 0) {
 
-                                strcpy(buf_send, "======== CLIENTS CONECTADOS ========");
+                                strcpy(buf_send, "===== CLIENTS CONECTADOS =====\n");
+
+                                /*
+                                string_length = strlen(buf_send);
+
+                                bytes_sent = send(i, buf_send, string_length, 0);
+
+                                if (bytes_sent == -1) {
+                                    perror("send");
+                                }
+                                */
+
+                                
+
+                                client_struct = lista_clients->inicio;
+
+                                while (client_struct != NULL) {
+
+                                    //memset(buf_send, '\0', sizeof buf_send);
+                                    
+                                    string_length = strlen(buf_send);
+                                    
+                                    strcpy(&buf_send[string_length], client_struct->name);
+                                    
+                                    string_length = strlen(buf_send);
+                                    
+                                    buf_send[string_length] = '\n';
+
+                                    //sprintf(buf_send, "%s\n", client_struct->name);
+
+                                    /*string_length = strlen(buf_send);
+
+                                    bytes_sent = send(i, buf_send, string_length, 0);
+
+                                    if (bytes_sent == -1) {
+                                        perror("send");
+                                    }
+
+                                    printf("buf_send: '%s'\n", buf_send);*/
+
+                                    client_struct = client_struct->posterior;
+
+                                }
+
+                                string_length = strlen(buf_send);
+                                
+                                strcpy(&buf_send[string_length], "==============================");
 
                                 string_length = strlen(buf_send);
 
@@ -606,31 +687,9 @@ void *thread_t2() {
                                 if (bytes_sent == -1) {
                                     perror("send");
                                 }
-
+                                
                                 printf("buf_send %s\n", buf_send);
                                 printf("%d bytes enviados\n", bytes_sent);
-
-                                client_struct = lista_clients->inicio;
-
-                                while (client_struct != NULL) {
-
-                                    memset(buf_send, '\0', sizeof buf_send);
-
-                                    sprintf(buf_send, "%s", client_struct->name);
-
-                                    string_length = strlen(buf_send);
-
-                                    bytes_sent = send(i, buf_send, string_length, 0);
-
-                                    if (bytes_sent == -1) {
-                                        perror("send");
-                                    }
-
-                                    printf("buf_send: '%s'\n", buf_send);
-
-                                    client_struct = client_struct->posterior;
-
-                                }
 
 
 
@@ -641,14 +700,14 @@ void *thread_t2() {
 
                             }
 
-                            memset(comando, '\0', sizeof comando);
-                            printf("comando memset: '%s'\n", comando);
+                            //memset(comando, '\0', sizeof comando);
+                            //printf("comando memset: '%s'\n", comando);
 
-                            memset(buf_message, '\0', sizeof buf_message);
-                            printf("buf_message memset: '%s'\n", buf_message);
+                            //memset(buf_message, '\0', sizeof buf_message);
+                            //printf("buf_message memset: '%s'\n", buf_message);
 
-                            memset(buf_recv, '\0', sizeof buf_recv);
-                            printf("buf_recv memset: '%s'\n", buf_recv);
+                            //memset(buf_recv, '\0', sizeof buf_recv);
+                            //printf("buf_recv memset: '%s'\n", buf_recv);
 
                         }
 
@@ -661,7 +720,9 @@ void *thread_t2() {
                             perror("read");
                             exit(3);
                         }
-
+                        
+                        master_cpy_fd_set = master_fd_set;
+                        
                         printf("thread_t2 - Pipe: %s\n", pipe_message);
                     }
 
@@ -712,7 +773,7 @@ int main(int argc, char *argv[]) {
     max_fd = pipe_fd[0];
     printf("main - pipe_fd[0] = %d\n", pipe_fd[0]);
     printf("main - max_fd = %d\n", max_fd);
-
+    
     pthread_create(&id_t1_t, NULL, thread_t1, argv[1]);
     pthread_create(&id_t2_t, NULL, thread_t2, NULL);
 
