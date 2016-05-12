@@ -24,8 +24,11 @@
 // Variáveis Globais
 int pipe_fd[2]; //File descriptor for creating a pipe
 int max_fd;
-fd_set master_fd_set;
+
 struct reg_lista *lista_clients;
+
+fd_set master_fd_set;
+pthread_mutex_t lock;
 
 struct reg_client {
     int sock_fd;
@@ -309,8 +312,10 @@ void *thread_t1(void *thread_argv) {
                     printf("thread T1 - new_sock_fd = %d\n", client_sock_fd);
                     printf("thread T1 - max_fd = %d\n", max_fd);
 
-                    ret_val = write(pipe_fd[1], "NEW_CONNECTION_ACCEPTED", 23);
-                    if (ret_val != 23) {
+                    string_length = strlen(buf_recv);
+                    
+                    ret_val = write(pipe_fd[1], buf_recv, string_length);
+                    if (ret_val <= 0) {
                         printf("thread T1 - erro pipe - ret_val = %d\n", ret_val);
                         perror("pipe write");
                         exit(2);
@@ -383,7 +388,7 @@ void *thread_t2() {
 
 
     struct tm *time_struct;
-    time_t t;
+    time_t time_type;
     
 
     fd_set master_cpy_fd_set;
@@ -392,11 +397,6 @@ void *thread_t2() {
     master_cpy_fd_set = master_fd_set;
 
     while (1) { // main accept() loop
-        
-        t = time(NULL);
-        time_struct = localtime(&t);
-        printf("\nHora %d:%d\n", time_struct->tm_hour, time_struct->tm_min);
-        
         
         FD_ZERO(&read_fd_set);
         read_fd_set = master_cpy_fd_set;
@@ -440,7 +440,13 @@ void *thread_t2() {
 
                             if (numbytes == 0) {
 
-                                printf("ERRO (recv): Client fechou conexão (socket %d)\n", i);
+                                time_type = time(NULL);
+                                time_struct = localtime(&time_type);
+
+                                client_struct = search_client_sockfd(lista_clients, i);
+
+                                printf("%.2d:%.2d\t%s\tDesconectado\n", time_struct->tm_hour, time_struct->tm_min, client_struct->name);
+
 
                             } else {
 
@@ -626,6 +632,14 @@ void *thread_t2() {
 
                                     printf("buf_send: '%s'\n", buf_send);
 
+                                    time_type = time(NULL);
+                                    time_struct = localtime(&time_type);
+
+                                    client_struct = search_client_sockfd(lista_clients, i);
+
+                                    printf("%.2d:%.2d\t%s\t%s\tExecutado: Não\n", time_struct->tm_hour, time_struct->tm_min, client_struct->name, comando);
+
+
                                 }
                                 
                                 //memset(buf_client_name, '\0', sizeof buf_client_name);
@@ -693,12 +707,24 @@ void *thread_t2() {
 
 
 
-                            } else { // erro: comando não suportado
+                            } else { // erro: comando não suportado                                
+                                
+                                time_type = time(NULL);
+                                time_struct = localtime(&time_type);
+                                
+                                client_struct = search_client_sockfd(lista_clients, i);
 
-                                printf("ERRO: Comando não suportado\n");
-                                printf("Comando HELP para lista de comandos suportados\n");
+                                printf("%.2d:%.2d\t%s\t%s\tExecutado: Não\n", time_struct->tm_hour, time_struct->tm_min, client_struct->name, comando);
+
 
                             }
+
+                            time_type = time(NULL);
+                            time_struct = localtime(&time_type);
+                            
+                            client_struct = search_client_sockfd(lista_clients, i);
+
+                            printf("%.2d:%.2d\t%s\t%s\tExecutado: Sim\n", time_struct->tm_hour, time_struct->tm_min, client_struct->name, comando);
 
                             //memset(comando, '\0', sizeof comando);
                             //printf("comando memset: '%s'\n", comando);
@@ -716,14 +742,21 @@ void *thread_t2() {
                     } else { //mensagem no pipe
 
                         ret_val = read(pipe_fd[0], pipe_message, 23);
-                        if (ret_val != 23) {
+                        if (ret_val <= 0) {
                             perror("read");
                             exit(3);
                         }
-                        
+
                         master_cpy_fd_set = master_fd_set;
-                        
+
+                        time_type = time(NULL);
+                        time_struct = localtime(&time_type);
+
                         printf("thread_t2 - Pipe: %s\n", pipe_message);
+
+                        printf("%.2d:%.2d\t%s\tConectado\n", time_struct->tm_hour, time_struct->tm_min, pipe_message);
+
+
                     }
 
                 } // END got new incoming connection
@@ -758,9 +791,6 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
-
-
-
     ret_val = pipe(pipe_fd);
     if (ret_val < 0) {
         perror("pipe ");
@@ -774,10 +804,18 @@ int main(int argc, char *argv[]) {
     printf("main - pipe_fd[0] = %d\n", pipe_fd[0]);
     printf("main - max_fd = %d\n", max_fd);
     
+    ret_val = pthread_mutex_init(&lock, NULL);
+    if (ret_val != 0) {
+        printf("\n mutex init failed\n");
+        return 1;
+    }
+    
     pthread_create(&id_t1_t, NULL, thread_t1, argv[1]);
     pthread_create(&id_t2_t, NULL, thread_t2, NULL);
 
     pthread_join(id_t1_t, NULL);
     pthread_join(id_t2_t, NULL);
-
+    
+    pthread_mutex_destroy(&lock);
+    
 }
