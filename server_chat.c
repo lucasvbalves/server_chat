@@ -24,9 +24,7 @@
 // Variáveis Globais
 int pipe_fd[2]; //File descriptor for creating a pipe
 int max_fd;
-
 struct reg_lista *lista_clients;
-
 fd_set master_fd_set;
 pthread_mutex_t lock;
 
@@ -117,7 +115,6 @@ struct reg_client *search_client_name(struct reg_lista *lista, char *search_name
     search_client = lista->inicio;
 
     if (lista->num_elem == 0) {
-        printf("Lista dos clientes esta vazia!\n");
         search_client = NULL;
         return search_client;
     } else {
@@ -129,7 +126,6 @@ struct reg_client *search_client_name(struct reg_lista *lista, char *search_name
                 search_client = search_client->posterior;
             }
         }
-        printf("Nao encontrado na lista dos clientes!\n");
         search_client = NULL;
         return search_client;
     }
@@ -144,7 +140,6 @@ struct reg_client *search_client_sockfd(struct reg_lista *lista, int search_sock
     search_client = lista->inicio;
 
     if (lista->num_elem == 0) {
-        printf("Lista dos clientes esta vazia!\n");
         search_client = NULL;
         return search_client;
     } else {
@@ -155,14 +150,11 @@ struct reg_client *search_client_sockfd(struct reg_lista *lista, int search_sock
                 search_client = search_client->posterior;
             }
         }
-        printf("Nao encontrado na lista dos clientes!\n");
         search_client = NULL;
         return search_client;
     }
 }
 /*==================================================================================*/
-
-
 
 
 // get sockaddr, IPv4 or IPv6:
@@ -197,8 +189,6 @@ void *thread_t1(void *thread_argv) {
     char ip_string[INET6_ADDRSTRLEN];
     char buf_recv[MAXDATASIZE];
     char buf_send[MAXDATASIZE];
-
-    printf("thread argumento: %s\n", thread_argv);
 
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_UNSPEC;
@@ -243,13 +233,11 @@ void *thread_t1(void *thread_argv) {
     }
 
     if (listen(listen_sock_fd, BACKLOG) == -1) {
-        perror("listen");
+        perror("Listen");
         exit(1);
     }
 
-    printf("server: waiting for connections...\n");
-
-
+    printf("Servidor: Aguardando conexões...\n");
 
     while (1) { // main accept() loop
         sin_size = sizeof their_addr;
@@ -262,7 +250,7 @@ void *thread_t1(void *thread_argv) {
         inet_ntop(their_addr.ss_family,
                 get_in_addr((struct sockaddr *) &their_addr),
                 ip_string, sizeof ip_string);
-        printf("server: got connection from %s\n", ip_string);
+        printf("Servidor: Conexão recebida de %s\n", ip_string);
 
 
         //recebe client_name
@@ -278,19 +266,19 @@ void *thread_t1(void *thread_argv) {
 
         } else {
 
-            printf("Nome Cliente: %s\n", buf_recv);
-
+            pthread_mutex_lock(&lock); // protege variável global para acesso
             client_struct = search_client_name(lista_clients, buf_recv);
+            pthread_mutex_unlock(&lock); // libera variável global para acesso
 
             if (client_struct == NULL) { //lista vazia ou nome não existe
 
+                pthread_mutex_lock(&lock); // protege variável global para acesso
                 ret_val = add_client(lista_clients, client_sock_fd, buf_recv);
+                pthread_mutex_unlock(&lock); // libera variável global para acesso
+
                 if (ret_val == 0) {
-                    printf("Client adicionado na lista com sucesso\n");
 
                     strcpy(buf_send, "Conectado com sucesso");
-
-                    printf("enviado pro client: %s\n", buf_send);
 
                     string_length = strlen(buf_send);
 
@@ -300,8 +288,7 @@ void *thread_t1(void *thread_argv) {
                         perror("send");
                     }
 
-                    printf("%d bytes enviados\n", bytes_sent);
-
+                    pthread_mutex_lock(&lock); // protege variável global para acesso
 
                     FD_SET(client_sock_fd, &master_fd_set);
 
@@ -309,20 +296,15 @@ void *thread_t1(void *thread_argv) {
                         max_fd = client_sock_fd;
                     }
 
-                    printf("thread T1 - new_sock_fd = %d\n", client_sock_fd);
-                    printf("thread T1 - max_fd = %d\n", max_fd);
+                    pthread_mutex_unlock(&lock); // libera variável global para acesso
 
                     string_length = strlen(buf_recv);
-                    
+
                     ret_val = write(pipe_fd[1], buf_recv, string_length);
                     if (ret_val <= 0) {
-                        printf("thread T1 - erro pipe - ret_val = %d\n", ret_val);
                         perror("pipe write");
                         exit(2);
                     }
-
-                    printf("thread T1 - pipe write ok - ret_val = %d\n", ret_val);
-
 
                 } else {
                     printf("Erro na adição da lista\n");
@@ -333,11 +315,7 @@ void *thread_t1(void *thread_argv) {
 
             } else { //nome já existe na lista
 
-                printf("Client já existe na lista\n");
-
-                strcpy(buf_send, "ERRO: CLIENT_NAME já está em uso");
-
-                printf("enviado pro client: %s\n", buf_send);
+                strcpy(buf_send, "Falha na conexão: CLIENT_NAME já está em uso");
 
                 string_length = strlen(buf_send);
 
@@ -347,20 +325,14 @@ void *thread_t1(void *thread_argv) {
                     perror("send");
                 }
 
-                printf("%d bytes enviados\n", bytes_sent);
-
-                close(client_sock_fd); // parent doesn't need this
+                close(client_sock_fd);
 
             }
         }
 
         //limpa buffer de recepção dos nomes
         memset(buf_recv, '\0', sizeof buf_recv);
-
-
     }
-
-
 }
 
 
@@ -375,6 +347,7 @@ void *thread_t2() {
     int string_length;
     int bytes_sent;
     int sendto_sockfd;
+    int max_fd_cpy;
 
     char comando[7];
     char pipe_message[24];
@@ -386,27 +359,23 @@ void *thread_t2() {
 
     struct reg_client *client_struct;
 
-
     struct tm *time_struct;
     time_t time_type;
-    
 
-    fd_set master_cpy_fd_set;
+    fd_set master_fd_set_cpy;
     fd_set read_fd_set;
-    
-    master_cpy_fd_set = master_fd_set;
+
+    pthread_mutex_lock(&lock); // protege variável global para acesso
+    master_fd_set_cpy = master_fd_set;
+    max_fd_cpy = max_fd;
+    pthread_mutex_unlock(&lock); // libera variável global para acesso
 
     while (1) { // main accept() loop
-        
+
         FD_ZERO(&read_fd_set);
-        read_fd_set = master_cpy_fd_set;
+        read_fd_set = master_fd_set_cpy;
 
-        printf("thread_t2 - pipe_fd[0] = %d\n", pipe_fd[0]);
-        printf("thread_t2 - max_fd = %d\n", max_fd);
-
-        ret_val = select(max_fd + 1, &read_fd_set, NULL, NULL, NULL);
-
-        printf("thread_t2 - select ret_val = %d\n", ret_val);
+        ret_val = select(max_fd_cpy + 1, &read_fd_set, NULL, NULL, NULL);
 
         if (ret_val == -1) {
 
@@ -416,9 +385,9 @@ void *thread_t2() {
 
             printf("ERRO: Timeout ocorreu\n");\
             
-        } else {    // algum file descriptor pronto para ser lido
+        } else { // algum file descriptor pronto para ser lido
 
-            for (i = 0; i <= max_fd; i++) { // percorre todos os file descriptors monitorados
+            for (i = 0; i <= max_fd_cpy; i++) { // percorre todos os file descriptors monitorados
 
                 memset(comando, '\0', sizeof comando);
                 memset(pipe_message, '\0', sizeof pipe_message);
@@ -428,11 +397,9 @@ void *thread_t2() {
                 memset(buf_message_sendto, '\0', sizeof buf_message_sendto);
                 memset(buf_client_name, '\0', sizeof buf_client_name);
 
-                printf("for do select %d\n", i);
+                if (FD_ISSET(i, &read_fd_set)) { // file descriptor 'i' pronto para ser lido
 
-                if (FD_ISSET(i, &read_fd_set)) {    // file descriptor 'i' pronto para ser lido
-
-                    if (i != pipe_fd[0]) {  // 'i não é o pipe[0], então é um socket
+                    if (i != pipe_fd[0]) { // 'i não é o pipe[0], então é um socket
 
                         numbytes = recv(i, buf_recv, MAXDATASIZE - 1, 0);
 
@@ -443,7 +410,9 @@ void *thread_t2() {
                                 time_type = time(NULL);
                                 time_struct = localtime(&time_type);
 
+                                pthread_mutex_lock(&lock); // protege variável global para acesso
                                 client_struct = search_client_sockfd(lista_clients, i);
+                                pthread_mutex_unlock(&lock); // libera variável global para acesso
 
                                 printf("%.2d:%.2d\t%s\tDesconectado\n", time_struct->tm_hour, time_struct->tm_min, client_struct->name);
 
@@ -456,19 +425,21 @@ void *thread_t2() {
 
                             close(i); // problema no socket, fecha conexão
 
-                            FD_CLR(i, &master_fd_set); // remove from master set                            
-                            FD_CLR(i, &master_cpy_fd_set); // remove from master copy set
+                            FD_CLR(i, &master_fd_set_cpy); // remove from master copy set
 
+                            pthread_mutex_lock(&lock); // protege variável global para acesso
+                            FD_CLR(i, &master_fd_set); // remove socket do master_fd_set
                             client_struct = search_client_sockfd(lista_clients, i);
+                            pthread_mutex_unlock(&lock); // libera variável global para acesso                            
 
                             if (client_struct != NULL) { //client encontrado. remover da lista
 
+                                pthread_mutex_lock(&lock); // protege variável global para acesso
                                 ret_val = remove_client(lista_clients, client_struct);
+                                pthread_mutex_unlock(&lock); // libera variável global para acesso
 
-                                if (ret_val == 0) {
-                                    printf("Client excluido com sucesso!\n");
-                                } else {
-                                    printf("Falha na exclusao do client!\n");
+                                if (ret_val != 0) {
+                                    printf("ERRO: Falha na exclusão do client da lista\n");
                                 }
 
                             } else { //problema: lista vazia ou não encontrado
@@ -477,49 +448,40 @@ void *thread_t2() {
 
                             }
 
-                        } else {    // numbytes > 0. recebeu mensagem de client
+                        } else { // numbytes > 0. recebeu mensagem de client
 
                             buf_recv[numbytes] = '\0';
-                            
-                            printf("Mensagem client: %s\n", buf_recv);
-                            printf("Numero bytes recebidos: %d\n", numbytes);
 
                             // identificação do comando para executar
                             j = 0;
-                            while (buf_recv[j] != ' ' && buf_recv[j] != '\0') {
+                            while (buf_recv[j] != ' ' && j < 6 && buf_recv[j] != '\0') {
 
                                 comando[j] = toupper(buf_recv[j]);
                                 j++;
 
                             }
 
-                            printf("comando: '%s'\n", comando);
-
-                            strcpy(buf_message, &buf_recv[j+1]);  //retira o comando e salva apenas a mensagem
-
-                            //memset(buf_recv, '\0', sizeof buf_recv);
-                            
-                            printf("message: '%s'\n", buf_message);
+                            strcpy(buf_message, &buf_recv[j + 1]); //retira o comando e salva apenas a mensagem
 
                             if (strcmp(comando, "SEND") == 0) {
+
+                                pthread_mutex_lock(&lock); // protege variável global para acesso
 
                                 //busca nome do cliente que mandou comando
                                 client_struct = search_client_sockfd(lista_clients, i);
 
+                                pthread_mutex_unlock(&lock); // libera variável global para acesso
+
                                 if (client_struct != NULL) { //client encontrado. pega nome dele
 
                                     sprintf(buf_send, "%s: %s", client_struct->name, buf_message);
-                                    
-                                    //memset(buf_message, '\0', sizeof buf_message);
-
-                                    printf("buf_send: '%s'\n", buf_send);
 
                                     string_length = strlen(buf_send);
 
                                     // we got some data from a client
-                                    for (k = 0; k <= max_fd; k++) {
+                                    for (k = 0; k <= max_fd_cpy; k++) {
                                         // send to everyone!
-                                        if (FD_ISSET(k, &master_cpy_fd_set)) {
+                                        if (FD_ISSET(k, &master_fd_set_cpy)) {
                                             // exceto o pipe e o client que enviou (i)
                                             if (k != pipe_fd[0] && k != i) {
                                                 bytes_sent = send(k, buf_send, string_length, 0);
@@ -536,6 +498,14 @@ void *thread_t2() {
 
                                 }
 
+                                time_type = time(NULL);
+                                time_struct = localtime(&time_type);
+
+                                pthread_mutex_lock(&lock); // protege variável global para acesso
+                                client_struct = search_client_sockfd(lista_clients, i);
+                                pthread_mutex_unlock(&lock); // libera variável global para acesso
+
+                                printf("%.2d:%.2d\t%s\t%s\tExecutado: Sim\n", time_struct->tm_hour, time_struct->tm_min, client_struct->name, comando);
 
                             } else if (strcmp(comando, "SENDTO") == 0) {
 
@@ -548,26 +518,26 @@ void *thread_t2() {
 
                                 }
 
-                                printf("sendto client_name: '%s'\n", buf_client_name);
+                                strcpy(buf_message_sendto, &buf_message[j + 1]); //retira nome do client de destino e salva mensagem
 
-                                strcpy(buf_message_sendto, &buf_message[j + 1]);    //retira nome do client de destino e salva mensagem
-
-                                //memset(buf_message, '\0', sizeof buf_message);
-                                
-                                printf("sendto message: '%s'\n", buf_message_sendto);
-
-                                printf("executar comando %s\n", comando);
+                                pthread_mutex_lock(&lock); // protege variável global para acesso
 
                                 //busca o client de destino pelo nome
                                 client_struct = search_client_name(lista_clients, buf_client_name);
+
+                                pthread_mutex_unlock(&lock); // libera variável global para acesso
 
                                 if (client_struct != NULL) { //client de destino encontrado
 
                                     //salva sockfd do client de destino para enviar mensagem                                    
                                     sendto_sockfd = client_struct->sock_fd;
 
+                                    pthread_mutex_lock(&lock); // protege variável global para acesso
+
                                     //busca client de origem pelo sockfd para pegar nome dele
                                     client_struct = search_client_sockfd(lista_clients, i);
+
+                                    pthread_mutex_unlock(&lock); // libera variável global para acesso
 
                                     if (client_struct != NULL) {
 
@@ -575,21 +545,13 @@ void *thread_t2() {
                                         //monta o buf_send para envio
                                         sprintf(buf_send, "%s: %s", client_struct->name, buf_message_sendto);
 
-                                        //memset(buf_message_sendto, '\0', sizeof buf_message_sendto);
-                                        
-                                        printf("1\n");
-
                                         string_length = strlen(buf_send);
-
-                                        printf("4\n");
 
                                         bytes_sent = send(sendto_sockfd, buf_send, string_length, 0);
 
                                         if (bytes_sent == -1) {
                                             perror("send");
                                         }
-
-                                        printf("buf_send: '%s'\n", buf_send);
 
 
                                     } else {//erro: lista vazia ou não encontrado
@@ -598,100 +560,62 @@ void *thread_t2() {
 
                                     }
 
+                                    time_type = time(NULL);
+                                    time_struct = localtime(&time_type);
 
+                                    pthread_mutex_lock(&lock); // protege variável global para acesso
+                                    client_struct = search_client_sockfd(lista_clients, i);
+                                    pthread_mutex_unlock(&lock); // libera variável global para acesso
+
+                                    printf("%.2d:%.2d\t%s\t%s\tExecutado: Sim\n", time_struct->tm_hour, time_struct->tm_min, client_struct->name, comando);
 
                                 } else { //client não está na lista dos conectados. retorna menssagem de erro
 
-                                    printf("5\n");
-
-                                    //memset(buf_send, '\0', sizeof buf_send);
-
-                                    printf("buf_send: '%s'\n", buf_send);
-
-                                    printf("6\n");
-
                                     sprintf(buf_send, "ERRO: Client '%s' não está conectado", buf_client_name);
-
-                                    printf("buf_send: '%s'\n", buf_send);
-
-                                    printf("7\n");
 
                                     string_length = strlen(buf_send);
 
-                                    printf("buf_send length: '%d'\n", string_length);
-
-                                    printf("8\n");
-
                                     bytes_sent = send(i, buf_send, string_length, 0);
-
-                                    printf("9\n");
 
                                     if (bytes_sent == -1) {
                                         perror("send");
                                     }
 
-                                    printf("buf_send: '%s'\n", buf_send);
-
                                     time_type = time(NULL);
                                     time_struct = localtime(&time_type);
 
+                                    pthread_mutex_lock(&lock); // protege variável global para acesso
                                     client_struct = search_client_sockfd(lista_clients, i);
+                                    pthread_mutex_unlock(&lock); // libera variável global para acesso
 
                                     printf("%.2d:%.2d\t%s\t%s\tExecutado: Não\n", time_struct->tm_hour, time_struct->tm_min, client_struct->name, comando);
 
-
                                 }
-                                
-                                //memset(buf_client_name, '\0', sizeof buf_client_name);
 
                             } else if (strcmp(comando, "WHO") == 0) {
 
                                 strcpy(buf_send, "===== CLIENTS CONECTADOS =====\n");
 
-                                /*
-                                string_length = strlen(buf_send);
-
-                                bytes_sent = send(i, buf_send, string_length, 0);
-
-                                if (bytes_sent == -1) {
-                                    perror("send");
-                                }
-                                */
-
-                                
-
+                                pthread_mutex_lock(&lock); // protege variável global para acesso
                                 client_struct = lista_clients->inicio;
+                                pthread_mutex_unlock(&lock); // libera variável global para acesso
 
                                 while (client_struct != NULL) {
 
-                                    //memset(buf_send, '\0', sizeof buf_send);
-                                    
                                     string_length = strlen(buf_send);
-                                    
+
                                     strcpy(&buf_send[string_length], client_struct->name);
-                                    
+
                                     string_length = strlen(buf_send);
-                                    
+
                                     buf_send[string_length] = '\n';
-
-                                    //sprintf(buf_send, "%s\n", client_struct->name);
-
-                                    /*string_length = strlen(buf_send);
-
-                                    bytes_sent = send(i, buf_send, string_length, 0);
-
-                                    if (bytes_sent == -1) {
-                                        perror("send");
-                                    }
-
-                                    printf("buf_send: '%s'\n", buf_send);*/
 
                                     client_struct = client_struct->posterior;
 
                                 }
 
                                 string_length = strlen(buf_send);
-                                
+
                                 strcpy(&buf_send[string_length], "==============================");
 
                                 string_length = strlen(buf_send);
@@ -701,43 +625,30 @@ void *thread_t2() {
                                 if (bytes_sent == -1) {
                                     perror("send");
                                 }
-                                
-                                printf("buf_send %s\n", buf_send);
-                                printf("%d bytes enviados\n", bytes_sent);
 
-
-
-                            } else { // erro: comando não suportado                                
-                                
                                 time_type = time(NULL);
                                 time_struct = localtime(&time_type);
-                                
+
+                                pthread_mutex_lock(&lock); // protege variável global para acesso
                                 client_struct = search_client_sockfd(lista_clients, i);
+                                pthread_mutex_unlock(&lock); // libera variável global para acesso
+
+                                printf("%.2d:%.2d\t%s\t%s\tExecutado: Sim\n", time_struct->tm_hour, time_struct->tm_min, client_struct->name, comando);
+
+                            } else { // erro: comando não suportado                                
+
+                                time_type = time(NULL);
+                                time_struct = localtime(&time_type);
+
+                                pthread_mutex_lock(&lock); // protege variável global para acesso
+                                client_struct = search_client_sockfd(lista_clients, i);
+                                pthread_mutex_unlock(&lock); // libera variável global para acesso
 
                                 printf("%.2d:%.2d\t%s\t%s\tExecutado: Não\n", time_struct->tm_hour, time_struct->tm_min, client_struct->name, comando);
 
-
                             }
 
-                            time_type = time(NULL);
-                            time_struct = localtime(&time_type);
-                            
-                            client_struct = search_client_sockfd(lista_clients, i);
-
-                            printf("%.2d:%.2d\t%s\t%s\tExecutado: Sim\n", time_struct->tm_hour, time_struct->tm_min, client_struct->name, comando);
-
-                            //memset(comando, '\0', sizeof comando);
-                            //printf("comando memset: '%s'\n", comando);
-
-                            //memset(buf_message, '\0', sizeof buf_message);
-                            //printf("buf_message memset: '%s'\n", buf_message);
-
-                            //memset(buf_recv, '\0', sizeof buf_recv);
-                            //printf("buf_recv memset: '%s'\n", buf_recv);
-
                         }
-
-                        //memset(buf_recv, '\0', sizeof buf_recv);
 
                     } else { //mensagem no pipe
 
@@ -747,12 +658,13 @@ void *thread_t2() {
                             exit(3);
                         }
 
-                        master_cpy_fd_set = master_fd_set;
+                        pthread_mutex_lock(&lock); // protege variável global para acesso
+                        master_fd_set_cpy = master_fd_set;
+                        max_fd_cpy = max_fd;
+                        pthread_mutex_unlock(&lock); // libera variável global para acesso
 
                         time_type = time(NULL);
                         time_struct = localtime(&time_type);
-
-                        printf("thread_t2 - Pipe: %s\n", pipe_message);
 
                         printf("%.2d:%.2d\t%s\tConectado\n", time_struct->tm_hour, time_struct->tm_min, pipe_message);
 
@@ -801,21 +713,19 @@ int main(int argc, char *argv[]) {
     FD_SET(pipe_fd[0], &master_fd_set);
 
     max_fd = pipe_fd[0];
-    printf("main - pipe_fd[0] = %d\n", pipe_fd[0]);
-    printf("main - max_fd = %d\n", max_fd);
-    
+
     ret_val = pthread_mutex_init(&lock, NULL);
     if (ret_val != 0) {
         printf("\n mutex init failed\n");
         return 1;
     }
-    
+
     pthread_create(&id_t1_t, NULL, thread_t1, argv[1]);
     pthread_create(&id_t2_t, NULL, thread_t2, NULL);
 
     pthread_join(id_t1_t, NULL);
     pthread_join(id_t2_t, NULL);
-    
+
     pthread_mutex_destroy(&lock);
-    
+
 }
