@@ -1,5 +1,5 @@
 /*
- ** server.c -- a stream socket server demo
+ ** server_chat.c
  */
 
 #include <stdio.h>
